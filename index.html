@@ -482,93 +482,94 @@
             console.log('DEBUG: File size:', luaContent.length, 'characters');
             console.log('DEBUG: First 200 characters:', luaContent.substring(0, 200));
             
-            const items = [];
             const itemMap = new Map();
             
             try {
-                // Strategy 1: Look for auction data tables
                 let foundItems = 0;
                 
-                // Try to find auction data in various formats
-                const patterns = [
-                    // Auctioneer format with item links and prices
-                    /\{\s*\"\|c[^|]*\|h\[([^\]]+)\]\|h\|r\"\s*,\s*[^,]*,\s*[^,]*,\s*[^,]*,\s*[^,]*,\s*(\d+),\s*(\d+)/g,
-                    // Broader item link pattern
-                    /\|h\[([^\]]+)\]\|h[^,]*,\s*(\d+),\s*(\d+)/g,
-                    // Simple bracketed items with numbers
-                    /\[([^\]]+)\][^0-9]*,?\s*(\d{3,})[^0-9]*,?\s*(\d+)/g,
-                    // TSM-style data
-                    /\"([^\"]+)\"\s*,\s*(\d+)\s*,\s*(\d+)/g
-                ];
+                // Enhanced Auctioneer-specific parsing
+                // Look for the auction data structure in AucScanData
+                const auctionDataPattern = /"auctions"\s*=\s*\{([^}]+(?:\{[^}]*\}[^}]*)*)\}/g;
+                let auctionMatch;
                 
-                console.log('DEBUG: Trying', patterns.length, 'different parsing patterns...');
-                
-                for (let i = 0; i < patterns.length && foundItems < 10; i++) {
-                    console.log(`DEBUG: Trying pattern ${i + 1}...`);
-                    const pattern = patterns[i];
-                    let match;
-                    let patternItems = 0;
+                while ((auctionMatch = auctionDataPattern.exec(luaContent)) !== null) {
+                    console.log('DEBUG: Found auction data block');
+                    const auctionData = auctionMatch[1];
                     
-                    while ((match = pattern.exec(luaContent)) !== null && patternItems < 1000) {
-                        const itemName = match[1];
-                        const price = parseInt(match[2]) || 0;
-                        const quantity = parseInt(match[3]) || 1;
-                        
-                        // Skip invalid entries
-                        if (!itemName || itemName.length < 2 || price <= 0) continue;
-                        if (itemName.includes('|c') || itemName.includes('|h')) continue; // Skip malformed names
-                        
-                        const key = itemName.toLowerCase().trim();
-                        
-                        // Convert copper to gold if price seems to be in copper
-                        let finalPrice = price;
-                        if (price > 10000) {
-                            finalPrice = price / 10000;
-                        }
-                        
-                        if (!itemMap.has(key) || itemMap.get(key).price > finalPrice) {
-                            itemMap.set(key, {
-                                itemName: itemName.trim(),
-                                price: finalPrice,
-                                quantity: quantity
-                            });
-                            patternItems++;
-                            foundItems++;
-                        }
-                    }
+                    // Parse individual auction entries - Auctioneer format
+                    // Pattern for: {"|cffffffff|Hitem:123|h[Item Name]|h|r", "1", "1", "1", "1", 12345, 1}
+                    const itemPattern = /\{\s*\"\|c[^|]*\|[Hh]item:[^|]*\|h\[([^\]]+)\]\|h\|r\"\s*,\s*\"[^\"]*\"\s*,\s*\"[^\"]*\"\s*,\s*\"[^\"]*\"\s*,\s*\"[^\"]*\"\s*,\s*(\d+)\s*,\s*(\d+)/g;
+                    let itemMatch;
                     
-                    console.log(`DEBUG: Pattern ${i + 1} found ${patternItems} items`);
-                    if (patternItems > 0) break; // Use first successful pattern
-                }
-                
-                console.log('DEBUG: Total items found:', foundItems);
-                
-                // If still no items, try a very broad search for any items with prices
-                if (foundItems === 0) {
-                    console.log('DEBUG: Trying fallback broad search...');
-                    const fallbackPattern = /([A-Za-z][A-Za-z\s']+[A-Za-z])[^0-9]*(\d{2,})/g;
-                    let match;
-                    let attempts = 0;
-                    
-                    while ((match = fallbackPattern.exec(luaContent)) !== null && attempts < 100) {
-                        attempts++;
-                        const itemName = match[1].trim();
-                        const price = parseInt(match[2]) || 0;
+                    while ((itemMatch = itemPattern.exec(auctionData)) !== null) {
+                        const itemName = itemMatch[1];
+                        const price = parseInt(itemMatch[2]) || 0;
+                        const quantity = parseInt(itemMatch[3]) || 1;
                         
-                        if (itemName.length > 3 && itemName.length < 50 && price > 50) {
+                        if (price > 0 && itemName && itemName.length > 1) {
                             const key = itemName.toLowerCase().trim();
+                            const goldPrice = price / 10000; // Convert copper to gold
                             
-                            if (!itemMap.has(key)) {
+                            if (!itemMap.has(key) || itemMap.get(key).price > goldPrice) {
                                 itemMap.set(key, {
-                                    itemName: itemName,
-                                    price: price > 10000 ? price / 10000 : price,
-                                    quantity: 1
+                                    itemName: itemName.trim(),
+                                    price: goldPrice,
+                                    quantity: quantity
                                 });
                                 foundItems++;
                             }
                         }
                     }
-                    console.log('DEBUG: Fallback found', foundItems, 'additional items');
+                }
+                
+                console.log('DEBUG: Auctioneer parsing found', foundItems, 'items');
+                
+                // Fallback parsing for other formats if no items found
+                if (foundItems === 0) {
+                    console.log('DEBUG: Trying fallback parsing patterns...');
+                    
+                    const patterns = [
+                        // Generic item link pattern
+                        /\|h\[([^\]]+)\]\|h[^,]*,\s*[^,]*,\s*[^,]*,\s*[^,]*,\s*[^,]*,\s*(\d+),\s*(\d+)/g,
+                        // Simpler pattern
+                        /\[([^\]]+)\][^0-9]*,\s*(\d{3,}),\s*(\d+)/g,
+                        // TSM-style data
+                        /\"([^\"]+)\"\s*,\s*(\d+)\s*,\s*(\d+)/g
+                    ];
+                    
+                    for (let i = 0; i < patterns.length && foundItems < 100; i++) {
+                        console.log(`DEBUG: Trying fallback pattern ${i + 1}...`);
+                        const pattern = patterns[i];
+                        let match;
+                        let patternItems = 0;
+                        
+                        // Remove the arbitrary limit and let it process all items
+                        while ((match = pattern.exec(luaContent)) !== null) {
+                            const itemName = match[1];
+                            const price = parseInt(match[2]) || 0;
+                            const quantity = parseInt(match[3]) || 1;
+                            
+                            // Skip invalid entries
+                            if (!itemName || itemName.length < 2 || price <= 0) continue;
+                            if (itemName.includes('|c') || itemName.includes('|h')) continue;
+                            
+                            const key = itemName.toLowerCase().trim();
+                            let finalPrice = price > 10000 ? price / 10000 : price;
+                            
+                            if (!itemMap.has(key) || itemMap.get(key).price > finalPrice) {
+                                itemMap.set(key, {
+                                    itemName: itemName.trim(),
+                                    price: finalPrice,
+                                    quantity: quantity
+                                });
+                                patternItems++;
+                                foundItems++;
+                            }
+                        }
+                        
+                        console.log(`DEBUG: Fallback pattern ${i + 1} found ${patternItems} items`);
+                        if (patternItems > 100) break; // Use first successful pattern
+                    }
                 }
                 
                 const result = Array.from(itemMap.values());
@@ -577,13 +578,13 @@
                 // Show sample of found items
                 if (result.length > 0) {
                     console.log('DEBUG: Sample items found:');
-                    result.slice(0, 5).forEach(item => {
+                    result.slice(0, 10).forEach(item => {
                         console.log(`  - ${item.itemName}: ${item.price}g (qty: ${item.quantity})`);
                     });
                 }
                 
                 if (result.length === 0) {
-                    console.log('DEBUG: Sample content for manual inspection:', luaContent.substring(0, 1000));
+                    console.log('DEBUG: No items found. Sample content:', luaContent.substring(0, 1000));
                     throw new Error('No auction data found. Please check that this is a valid auction house data file.');
                 }
                 
@@ -664,6 +665,7 @@
             
             analysisResults = [];
             console.log('Starting analysis with', allianceData.length, 'Alliance items and', hordeData.length, 'Horde items');
+            console.log('DEBUG: Min profit filters:', minProfit, 'gold,', minProfitPercent, '%');
             
             // Create item maps for quick lookup (case-insensitive)
             const allianceMap = new Map();
@@ -685,13 +687,19 @@
             
             // Find matching items between factions
             const allItems = new Set([...allianceMap.keys(), ...hordeMap.keys()]);
-            console.log('Found', allItems.size, 'unique items across both factions');
+            console.log('DEBUG: Found', allItems.size, 'unique items across both factions');
+            console.log('DEBUG: Alliance unique items:', allianceMap.size);
+            console.log('DEBUG: Horde unique items:', hordeMap.size);
+            
+            let matchingItems = 0;
+            let profitableOpportunities = 0;
             
             allItems.forEach(itemKey => {
                 const allianceItem = allianceMap.get(itemKey);
                 const hordeItem = hordeMap.get(itemKey);
                 
                 if (allianceItem && hordeItem && allianceItem.price > 0 && hordeItem.price > 0) {
+                    matchingItems++;
                     const alliancePrice = allianceItem.price;
                     const hordePrice = hordeItem.price;
                     
@@ -711,12 +719,25 @@
                                 allianceQty: allianceItem.quantity,
                                 hordeQty: hordeItem.quantity
                             });
+                            profitableOpportunities++;
                         }
                     }
                 }
             });
             
-            console.log('Found', analysisResults.length, 'profitable opportunities');
+            console.log('DEBUG: Items found on both factions:', matchingItems);
+            console.log('DEBUG: Profitable opportunities found:', profitableOpportunities);
+            
+            if (matchingItems === 0) {
+                alert('No matching items found between factions. This could mean:\n1. The item names don\'t match exactly\n2. The data is from different servers\n3. There\'s a parsing issue\n\nCheck the console for debug info.');
+                return;
+            }
+            
+            if (profitableOpportunities === 0) {
+                alert(`Found ${matchingItems} matching items but no profitable opportunities with current filters:\n- Min profit: ${minProfit}g\n- Min profit %: ${minProfitPercent}%\n\nTry lowering the filters or check if prices are realistic.`);
+                return;
+            }
+            
             displayResults();
         }
         
