@@ -529,8 +529,10 @@
                     console.log('DEBUG: Trying fallback parsing patterns...');
                     
                     const patterns = [
-                        // Generic item link pattern
+                        // Generic item link pattern - try different price positions
                         /\|h\[([^\]]+)\]\|h[^,]*,\s*[^,]*,\s*[^,]*,\s*[^,]*,\s*[^,]*,\s*(\d+),\s*(\d+)/g,
+                        // Alternative price position
+                        /\|h\[([^\]]+)\]\|h[^,]*,\s*(\d+),\s*(\d+)/g,
                         // Simpler pattern
                         /\[([^\]]+)\][^0-9]*,\s*(\d{3,}),\s*(\d+)/g,
                         // TSM-style data
@@ -543,18 +545,41 @@
                         let match;
                         let patternItems = 0;
                         
-                        // Remove the arbitrary limit and let it process all items
+                        // Show first few matches for this pattern
+                        const sampleMatches = [];
+                        
                         while ((match = pattern.exec(luaContent)) !== null) {
                             const itemName = match[1];
-                            const price = parseInt(match[2]) || 0;
-                            const quantity = parseInt(match[3]) || 1;
+                            const priceRaw = match[2];
+                            const quantityRaw = match[3];
+                            const price = parseInt(priceRaw) || 0;
+                            const quantity = parseInt(quantityRaw) || 1;
+                            
+                            // Collect sample for debugging
+                            if (sampleMatches.length < 5) {
+                                sampleMatches.push({
+                                    name: itemName,
+                                    priceRaw: priceRaw,
+                                    price: price,
+                                    quantity: quantity
+                                });
+                            }
                             
                             // Skip invalid entries
                             if (!itemName || itemName.length < 2 || price <= 0) continue;
                             if (itemName.includes('|c') || itemName.includes('|h')) continue;
                             
                             const key = itemName.toLowerCase().trim();
-                            let finalPrice = price > 10000 ? price / 10000 : price;
+                            
+                            // Smart price conversion - check if it looks like copper
+                            let finalPrice = price;
+                            if (price > 10000) {
+                                finalPrice = price / 10000; // Copper to gold
+                            } else if (price > 100 && price < 10000) {
+                                // Could be silver or gold - check context
+                                finalPrice = price / 100; // Assume silver to gold
+                            }
+                            // else assume it's already in gold
                             
                             if (!itemMap.has(key) || itemMap.get(key).price > finalPrice) {
                                 itemMap.set(key, {
@@ -567,6 +592,14 @@
                             }
                         }
                         
+                        // Show sample matches for debugging
+                        if (sampleMatches.length > 0) {
+                            console.log(`DEBUG: Pattern ${i + 1} sample matches:`);
+                            sampleMatches.forEach(sample => {
+                                console.log(`  - ${sample.name}: raw="${sample.priceRaw}", parsed=${sample.price}, qty=${sample.quantity}`);
+                            });
+                        }
+                        
                         console.log(`DEBUG: Fallback pattern ${i + 1} found ${patternItems} items`);
                         if (patternItems > 100) break; // Use first successful pattern
                     }
@@ -575,12 +608,24 @@
                 const result = Array.from(itemMap.values());
                 console.log(`DEBUG: Final result: ${result.length} unique items`);
                 
-                // Show sample of found items
+                // Show detailed sample of found items with price analysis
                 if (result.length > 0) {
-                    console.log('DEBUG: Sample items found:');
+                    console.log('DEBUG: Sample items found with price analysis:');
                     result.slice(0, 10).forEach(item => {
-                        console.log(`  - ${item.itemName}: ${item.price}g (qty: ${item.quantity})`);
+                        const priceRange = item.price < 1 ? 'under 1g' : 
+                                         item.price < 10 ? '1-10g' :
+                                         item.price < 100 ? '10-100g' : 'over 100g';
+                        console.log(`  - ${item.itemName}: ${item.price}g (${priceRange}) qty:${item.quantity}`);
                     });
+                    
+                    // Price distribution
+                    const priceRanges = {
+                        'under1g': result.filter(i => i.price < 1).length,
+                        '1to10g': result.filter(i => i.price >= 1 && i.price < 10).length,
+                        '10to100g': result.filter(i => i.price >= 10 && i.price < 100).length,
+                        'over100g': result.filter(i => i.price >= 100).length
+                    };
+                    console.log('DEBUG: Price distribution:', priceRanges);
                 }
                 
                 if (result.length === 0) {
