@@ -8,6 +8,13 @@ env/
 venv/
 ENV/
 
+# PyInstaller build files
+build/
+dist/
+*.spec
+# Keep the main executable
+!WoW_Classic_AH_Analyzer.exe
+
 # Analysis outputs
 *.csv
 *.xlsx

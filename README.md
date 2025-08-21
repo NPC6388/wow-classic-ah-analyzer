@@ -21,28 +21,34 @@ A comprehensive Python tool for analyzing World of Warcraft Classic auction hous
 - Recent auction house scans on both factions
 - Required Auctioneer files: `auc-scandata.lua`, `Auc-Stat-Histogram.lua`, and `Auc-Stat-Simple.lua`
 
-## 🚀 Installation
+## 🚀 Quick Start (Executable)
 
-1. Ensure Python is installed on your system
+**For easy use without Python setup:**
+
+1. **Download** the latest release from GitHub
+2. **Run auction scans** with Auctioneer on both your Horde and Alliance characters
+3. **Double-click** `WoW_Classic_AH_Analyzer.exe` or `Run_AH_Analyzer.bat`
+
+The analyzer will:
+- ✅ Automatically find your WoW SavedVariables files
+- ✅ Process all auction and statistical data
+- ✅ Generate a comprehensive Excel report
+- ✅ Open the report automatically for review
+
+## 🐍 Python Installation (Advanced)
+
+**For developers or users who prefer Python:**
+
+1. Ensure Python 3.6+ is installed
 2. Clone or download this repository
-3. Install required dependencies:
+3. Install dependencies:
 ```bash
 pip install openpyxl
 ```
-
-## 📖 Usage
-
-1. **Run auction scans** with Auctioneer on both your Horde and Alliance characters
-2. **Execute the analyzer**:
+4. Run the script:
 ```bash
 python ah_analyzer_final.py
 ```
-
-The script will automatically:
-- ✅ Read auction data from your WoW SavedVariables
-- ✅ Process historical market data and statistics  
-- ✅ Generate a comprehensive Excel report
-- ✅ Open the report automatically for review
 
 ## 📁 Data Sources
 
@@ -117,11 +123,22 @@ Located below the main table:
 
 ```
 wow-classic-ah-analyzer/
-├── ah_analyzer_final.py           # Main analyzer script
+├── WoW_Classic_AH_Analyzer.exe    # Ready-to-run executable ⭐
+├── Run_AH_Analyzer.bat            # Simple batch launcher
+├── ah_analyzer_final.py           # Main Python script
 ├── README.md                      # This documentation
+├── .gitignore                     # Git ignore rules
 ├── index.html                     # Web-based analyzer (legacy)
+├── dist/                          # PyInstaller build output
+├── build/                         # PyInstaller temporary files
 └── ah_analysis_YYYYMMDD_HHMMSS.xlsx # Generated Excel reports
 ```
+
+### File Descriptions
+- **`WoW_Classic_AH_Analyzer.exe`** - Single-file executable, no Python required
+- **`Run_AH_Analyzer.bat`** - Batch file with nice console window
+- **`ah_analyzer_final.py`** - Python source code for developers
+- **`dist/`** - Contains the original executable build
 
 ## 🐛 Troubleshooting
 
@@ -130,6 +147,8 @@ wow-classic-ah-analyzer/
 - **No arbitrage opportunities**: Normal - indicates similar pricing across factions
 - **Missing market data**: Run more auction scans to build Auctioneer's statistical database
 - **Path issues**: Verify WoW installation matches default Classic Era location
+- **Executable won't run**: Try "Run as Administrator" or check Windows Defender exclusions
+- **Slow startup (executable)**: First run extracts libraries, subsequent runs are faster
 
 ### Data Validation
 - **Times seen = 0**: `Auc-Stat-Simple.lua` files need time to accumulate scan data

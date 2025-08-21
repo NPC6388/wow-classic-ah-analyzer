@@ -1,0 +1,13 @@
+Icon Design for WoW Classic AH Analyzer:
+
+Suggested Design:
+- A gold coin with "WoW" text or auction house gavel
+- Colors: Gold (#FFD700), Dark Blue (#1E3A8A), White (#FFFFFF)
+- 16x16, 32x32, 48x48, and 256x256 pixel versions
+- .ico format for Windows executable
+
+For now, the executable will use the default Python icon.
+To add a custom icon later:
+1. Create a .ico file with the above design
+2. Save as "wow_ah_icon.ico" in the project directory
+3. Rebuild with: pyinstaller --onefile --windowed --icon=wow_ah_icon.ico ah_analyzer_final.py
