@@ -3,6 +3,9 @@ import csv
 import os
 from datetime import datetime
 from collections import defaultdict
+from openpyxl import Workbook
+from openpyxl.worksheet.table import Table, TableStyleInfo
+from openpyxl.styles import Font, PatternFill, Border, Side
 
 def convert_price_to_gold(price_str):
     """Convert price from copper to gold.silver.copper format"""
@@ -81,6 +84,36 @@ def parse_auc_stat_stddev(file_path):
                 continue
     
     print(f"Found market price data for {len(market_prices)} items")
+    return market_prices
+
+def parse_auc_stat_simple_market_prices(file_path):
+    """Parse Auc-Stat-Simple.lua file to get market price data"""
+    print(f"Processing Simple stat file for market prices: {file_path}")
+    
+    try:
+        with open(file_path, 'r', encoding='utf-8') as f:
+            content = f.read()
+    except Exception as e:
+        print(f"Error reading Simple stat file: {e}")
+        return {}
+    
+    market_prices = {}
+    
+    # Look for item data in format: ["12640"] = "0@count1;count2;price1;price2;price3;price4"
+    # Use the first price field (price1) which matches in-game market prices better
+    pattern = r'\["(\d+)"\]\s*=\s*"[^@]*@[^;]*;[^;]*;(\d+\.?\d*);[^"]*"'
+    
+    matches = re.finditer(pattern, content)
+    
+    for match in matches:
+        item_id = int(match.group(1))
+        market_price_copper = float(match.group(2))  # First price value (price1), can be decimal
+        
+        # Convert market price from copper to gold
+        market_price_gold = convert_price_to_gold(market_price_copper)
+        market_prices[item_id] = market_price_gold
+    
+    print(f"Found Simple stat market price data for {len(market_prices)} items")
     return market_prices
 
 def parse_auc_stat_histogram(file_path):
@@ -162,93 +195,82 @@ def parse_auctioneer_data(file_path):
     items = []
     
     # Look for the ropes section with the return format
-    ropes_match = re.search(r'\["ropes"\]\s*=\s*\{([^}]+(?:\{[^}]*\}[^}]*)*)\}', content, re.DOTALL)
+    ropes_match = re.search(r'\["ropes"\]\s*=\s*\{([^}]+(?:\{[^}]*\}[^}]*)*)', content, re.DOTALL)
     
     if ropes_match:
         ropes_content = ropes_match.group(1)
         print(f"Found ropes section, length: {len(ropes_content)}")
         
         # Look for the return statement with the actual data
-        return_match = re.search(r'return\s*\{([^}]+(?:\{[^}]*\}[^}]*)*)\}', ropes_content, re.DOTALL)
+        return_match = re.search(r'return\s*\{(.+)', ropes_content, re.DOTALL)
         
         if return_match:
             data_content = return_match.group(1)
             print(f"Found return data, length: {len(data_content)}")
             
-            # Parse individual item entries
-            # Pattern: {"item_link",level,quality,count,nil,buyout,bid,time,seller_name,...
-            item_pattern = r'\{([^}]+(?:\{[^}]*\}[^}]*)*)\}'
+            # Parse individual item entries using fallback approach immediately
+            # Look for item patterns in the data content
+            item_pattern = r'Hitem:(\\d+):[^|]*\\|h\\[(.+?)\\]'
             
             matches = re.finditer(item_pattern, data_content, re.DOTALL)
             
             for match in matches:
                 try:
-                    item_data = match.group(1)
+                    item_id = int(match.group(1))
+                    item_name = match.group(2)
                     
-                    # Extract item link and name
-                    item_link_match = re.search(r'\|Hitem:(\d+):[^|]*\|h\[([^\]]+)\]\|h\|r', item_data)
-                    if not item_link_match:
+                    # Find the surrounding context for this item
+                    start_pos = max(0, match.start() - 50)
+                    end_pos = min(len(data_content), match.end() + 200)
+                    context = data_content[start_pos:end_pos]
+                    
+                    # Extract numerical values from the context
+                    # Look for pattern: level,quality,count,nil,buyout,bid,time
+                    value_pattern = r',(\\d+),(\\d+),(\\d+),nil,(\\d+),(\\d+),(\\d+)'
+                    value_match = re.search(value_pattern, context)
+                    
+                    if not value_match:
                         continue
-                    
-                    item_id = int(item_link_match.group(1))
-                    item_name = item_link_match.group(2)
-                    
-                    # Split the rest of the data by commas
-                    parts = item_data.split(',')
-                    
-                    # Find the numeric values after the item link
-                    # Skip the item link part and look for numbers
-                    numeric_parts = []
-                    for part in parts:
-                        part = part.strip().strip('"')
-                        if part.isdigit():
-                            numeric_parts.append(int(part))
-                    
-                    if len(numeric_parts) >= 10:
-                        level = numeric_parts[0]
-                        quality = numeric_parts[1]
-                        count = numeric_parts[2]
-                        buyout_price = numeric_parts[4]  # Skip the nil value
-                        bid_price = numeric_parts[5]
-                        time_left = numeric_parts[6]
-                        # Position 14 in the data structure contains scan frequency
-                        scan_frequency = numeric_parts[9] if len(numeric_parts) > 9 else 1
                         
-                        # Extract seller name (it's usually after the time value)
-                        seller_match = re.search(r'(\d+),(\d+),(\d+),(\d+),(\d+),(\d+),(\d+),"([^"]+)"', item_data)
-                        if seller_match:
-                            seller_name = seller_match.group(7)
-                        else:
-                            seller_name = "Unknown"
-                        
-                        # Convert price to gold using our pricing logic
-                        buyout_gold = convert_price_to_gold(buyout_price)
-                        bid_gold = convert_price_to_gold(bid_price)
-                        
-                        items.append({
-                            'item_id': item_id,
-                            'item_name': item_name,
-                            'level': level,
-                            'quality': quality,
-                            'count': count,
-                            'buyout_price_copper': buyout_price,
-                            'buyout_price_gold': buyout_gold,
-                            'bid_price_copper': bid_price,
-                            'bid_price_gold': bid_gold,
-                            'time_left': time_left,
-                            'seller_name': seller_name,
-                            'scan_frequency': scan_frequency
-                        })
-                        
+                    level = int(value_match.group(1))
+                    quality = int(value_match.group(2))
+                    count = int(value_match.group(3))
+                    buyout_price = int(value_match.group(4))
+                    bid_price = int(value_match.group(5))
+                    time_left = int(value_match.group(6))
+                    
+                    # Try to find seller name
+                    seller_match = re.search(r'\"([^\"]+)\"[^}]*$', context)
+                    seller_name = seller_match.group(1) if seller_match and seller_match.group(1) != item_name else "Unknown"
+                    
+                    # Convert price to gold using our pricing logic
+                    buyout_gold = convert_price_to_gold(buyout_price)
+                    bid_gold = convert_price_to_gold(bid_price)
+                    
+                    items.append({
+                        'item_id': item_id,
+                        'item_name': item_name,
+                        'level': level,
+                        'quality': quality,
+                        'count': count,
+                        'buyout_price_copper': buyout_price,
+                        'buyout_price_gold': buyout_gold,
+                        'bid_price_copper': bid_price,
+                        'bid_price_gold': bid_gold,
+                        'time_left': time_left,
+                        'seller_name': seller_name,
+                        'scan_frequency': 1
+                    })
+                    
                 except Exception as e:
-                    print(f"Error parsing item: {e}")
+                    print(f"Error parsing item: {e} - Match: {match.group(0)[:100] if match else 'None'}")
                     continue
             
-            print(f"Found {len(items)} items in ropes section")
+            print(f"Found {len(items)} items using precise parsing")
     
-    # If no items found in ropes, try alternative parsing
-    if len(items) == 0:
-        print("Trying alternative parsing...")
+    # If precise parsing found few items, try fallback approach
+    if len(items) < 10:
+        print("Trying fallback parsing approach...")
         
         # Look for any item-like patterns in the entire file
         alt_pattern = r'\|Hitem:(\d+):[^|]*\|h\[([^\]]+)\]\|h\|r'
@@ -270,15 +292,16 @@ def parse_auctioneer_data(file_path):
                 # Look for numeric values
                 numbers = re.findall(r'(\d+)', next_data)
                 
-                if len(numbers) >= 10:
+                if len(numbers) >= 12:
                     level = int(numbers[0])
                     quality = int(numbers[1])
                     count = int(numbers[2])
-                    buyout_price = int(numbers[4])  # Skip nil
-                    bid_price = int(numbers[5])
+                    bid_price = int(numbers[3])     # Bid price (lower)
+                    buyout_price = int(numbers[11]) # Buyout price (higher)
                     time_left = int(numbers[6])
                     # Position 14 in data structure contains scan frequency
                     scan_frequency = int(numbers[9]) if len(numbers) > 9 else 1
+                    
                     
                     # Convert price to gold using our pricing logic
                     buyout_gold = convert_price_to_gold(buyout_price)
@@ -325,33 +348,51 @@ def analyze_arbitrage(horde_items, alliance_items, horde_times_seen=None, allian
     common_items = set(horde_by_name.keys()) & set(alliance_by_name.keys())
     print(f"Found {len(common_items)} items on both factions")
     
+    
     arbitrage_opportunities = []
     
     for item_name in common_items:
         horde_items_list = horde_by_name[item_name]
         alliance_items_list = alliance_by_name[item_name]
         
-        # Calculate average prices (for backup if market price not available)
-        horde_avg_price = sum(item['buyout_price_gold'] for item in horde_items_list) / len(horde_items_list)
-        alliance_avg_price = sum(item['buyout_price_gold'] for item in alliance_items_list) / len(alliance_items_list)
+        # Filter out bid-only auctions (no buyout price) first
+        horde_buyout_items = [item for item in horde_items_list if item['buyout_price_gold'] > 0]
+        alliance_buyout_items = [item for item in alliance_items_list if item['buyout_price_gold'] > 0]
+        
+        # Skip items that have no buyout auctions on either faction
+        if not horde_buyout_items or not alliance_buyout_items:
+            continue
+            
+        # Calculate average prices (for backup if market price not available) - using only buyout auctions
+        horde_avg_price = sum(item['buyout_price_gold'] for item in horde_buyout_items) / len(horde_buyout_items)
+        alliance_avg_price = sum(item['buyout_price_gold'] for item in alliance_buyout_items) / len(alliance_buyout_items)
         
         # Get market prices from histogram data (prefer this over average)
         item_id = horde_items_list[0]['item_id'] if horde_items_list else alliance_items_list[0]['item_id']
         horde_market_price = horde_market_prices.get(item_id, horde_avg_price) if horde_market_prices else horde_avg_price
         alliance_market_price = alliance_market_prices.get(item_id, alliance_avg_price) if alliance_market_prices else alliance_avg_price
+            
+        # Find minimum buyout prices (cheapest buyout-only listing on each faction)
+        horde_min_price = min(item['buyout_price_gold'] for item in horde_buyout_items)
+        alliance_min_price = min(item['buyout_price_gold'] for item in alliance_buyout_items)
         
-        # Find minimum buyout prices (cheapest listing on each faction)
-        horde_min_price = min(item['buyout_price_gold'] for item in horde_items_list)
-        alliance_min_price = min(item['buyout_price_gold'] for item in alliance_items_list)
         
-        # Find price difference between minimum prices
-        price_diff = abs(horde_min_price - alliance_min_price)
         
-        # Determine which faction is cheaper based on minimum prices
-        if horde_min_price < alliance_min_price:
-            cheaper_faction = "Horde"
+        
+        # Find price difference between market prices (which will be displayed as buyout prices)
+        price_diff = abs(horde_market_price - alliance_market_price)
+        
+        # Determine which faction is cheaper based on market prices (historic)
+        if horde_market_price < alliance_market_price:
+            cheaper_historic = "Horde"
         else:
-            cheaper_faction = "Alliance"
+            cheaper_historic = "Alliance"
+            
+        # Determine which faction has cheaper current buyout price
+        if horde_min_price < alliance_min_price:
+            cheaper_buyout = "Horde"
+        else:
+            cheaper_buyout = "Alliance"
         
         # Get times seen from histogram files
         horde_total_scans = horde_times_seen.get(item_id, 0) if horde_times_seen else 0
@@ -364,7 +405,8 @@ def analyze_arbitrage(horde_items, alliance_items, horde_times_seen=None, allian
             'horde_buyout_price': horde_min_price,
             'alliance_buyout_price': alliance_min_price,
             'price_difference': price_diff,
-            'cheaper_faction': cheaper_faction,
+            'cheaper_buyout': cheaper_buyout,
+            'cheaper_historic': cheaper_historic,
             'horde_scan_count': horde_total_scans,
             'alliance_scan_count': alliance_total_scans
         })
@@ -374,94 +416,224 @@ def analyze_arbitrage(horde_items, alliance_items, horde_times_seen=None, allian
     
     return arbitrage_opportunities
 
-def generate_csv_report(horde_items, alliance_items, arbitrage_opportunities):
-    """Generate CSV reports"""
+def generate_excel_report(horde_items, alliance_items, arbitrage_opportunities):
+    """Generate Excel reports with formatted tables"""
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     
-    # Generate comprehensive report
-    csv_filename = f"ah_analysis_{timestamp}.csv"
+    # Create workbook with multiple sheets
+    wb = Workbook()
     
-    with open(csv_filename, 'w', newline='', encoding='utf-8') as csvfile:
-        writer = csv.writer(csvfile)
-        
-        # Write header
-        writer.writerow([
-            'Item Name', 'Times Seen (Horde, Alliance)', 'Horde Buyout Price', 
-            'Alliance Buyout Price', 'Price Difference', 'Horde Market Price', 
-            'Alliance Market Price', 'Cheaper Faction'
-        ])
-        
-        # Write arbitrage opportunities
-        for opp in arbitrage_opportunities:
-            # Round price difference to gold only (no silver/copper)
-            price_diff_gold = int(round(opp['price_difference']))
-            
-            writer.writerow([
-                opp['item_name'],
-                f"{opp['horde_scan_count']}, {opp['alliance_scan_count']}",
-                format_price_wow(opp['horde_buyout_price']),
-                format_price_wow(opp['alliance_buyout_price']),
-                f"{price_diff_gold}g",
-                format_price_wow(opp['horde_market_price']),
-                format_price_wow(opp['alliance_market_price']),
-                opp['cheaper_faction']
-            ])
+    # Main analysis sheet
+    ws_main = wb.active
+    ws_main.title = "Arbitrage Analysis"
     
-    print(f"Generated CSV report: {csv_filename}")
+    # Headers for main analysis
+    headers = [
+        'Item Name', 'Times Seen (Horde, Alliance)', 'Horde Buyout Price', 
+        'Alliance Buyout Price', 'Price Difference', 'Horde Market Price', 
+        'Alliance Market Price', 'Cheaper Buyout', 'Cheaper Historic'
+    ]
     
-    # Generate separate faction reports
-    horde_csv = f"horde_bargains_{timestamp}.csv"
-    with open(horde_csv, 'w', newline='', encoding='utf-8') as csvfile:
-        writer = csv.writer(csvfile)
-        writer.writerow(['Item Name', 'Buyout Price (Gold)', 'Count', 'Seller'])
+    # Write headers
+    for col, header in enumerate(headers, 1):
+        ws_main.cell(row=1, column=col, value=header)
+    
+    # Write arbitrage opportunities
+    for row, opp in enumerate(arbitrage_opportunities, 2):
+        price_diff_gold = int(round(opp['price_difference']))
         
-        # Group Horde items by name and find lowest prices
-        horde_by_name = defaultdict(list)
-        for item in horde_items:
-            horde_by_name[item['item_name']].append(item)
-        
-        horde_bargains = []
-        for name, items in horde_by_name.items():
-            min_price_item = min(items, key=lambda x: x['buyout_price_gold'])
+        ws_main.cell(row=row, column=1, value=opp['item_name'])
+        ws_main.cell(row=row, column=2, value=f"{opp['horde_scan_count']}, {opp['alliance_scan_count']}")
+        ws_main.cell(row=row, column=3, value=format_price_wow(opp['horde_buyout_price']))
+        ws_main.cell(row=row, column=4, value=format_price_wow(opp['alliance_buyout_price']))
+        ws_main.cell(row=row, column=5, value=f"{price_diff_gold}g")
+        ws_main.cell(row=row, column=6, value=format_price_wow(opp['horde_market_price']))
+        ws_main.cell(row=row, column=7, value=format_price_wow(opp['alliance_market_price']))
+        ws_main.cell(row=row, column=8, value=opp['cheaper_buyout'])
+        ws_main.cell(row=row, column=9, value=opp['cheaper_historic'])
+    
+    # Convert main sheet to table
+    if len(arbitrage_opportunities) > 0:
+        table_ref = f"A1:I{len(arbitrage_opportunities) + 1}"
+        table = Table(displayName="ArbitrageTable", ref=table_ref)
+        style = TableStyleInfo(name="TableStyleMedium9", showFirstColumn=False,
+                             showLastColumn=False, showRowStripes=True, showColumnStripes=True)
+        table.tableStyleInfo = style
+        ws_main.add_table(table)
+    
+    # Add conversion calculator below the table
+    calculator_start_row = len(arbitrage_opportunities) + 4  # Leave some space after table
+    
+    # Calculator title
+    ws_main.cell(row=calculator_start_row, column=1, value="Per-Unit Price Calculator")
+    ws_main.cell(row=calculator_start_row, column=1).font = Font(bold=True, size=14)
+    
+    # Calculator labels and input fields
+    ws_main.cell(row=calculator_start_row + 2, column=1, value="Stack Size:")
+    ws_main.cell(row=calculator_start_row + 2, column=2).border = Border(outline=Side(style='thin'))
+    ws_main.cell(row=calculator_start_row + 2, column=2).fill = PatternFill(start_color="E6F3FF", end_color="E6F3FF", fill_type="solid")
+    
+    ws_main.cell(row=calculator_start_row + 3, column=1, value="Total Buyout Price (copper):")
+    ws_main.cell(row=calculator_start_row + 3, column=2).border = Border(outline=Side(style='thin'))
+    ws_main.cell(row=calculator_start_row + 3, column=2).fill = PatternFill(start_color="E6F3FF", end_color="E6F3FF", fill_type="solid")
+    
+    # Result field with formula
+    ws_main.cell(row=calculator_start_row + 5, column=1, value="Per-Unit Price (copper):")
+    ws_main.cell(row=calculator_start_row + 5, column=1).font = Font(bold=True)
+    
+    # Formula to calculate per-unit price (Total Price / Stack Size)
+    stack_cell = f"B{calculator_start_row + 2}"
+    price_cell = f"B{calculator_start_row + 3}"
+    formula_cell = f"B{calculator_start_row + 5}"
+    ws_main.cell(row=calculator_start_row + 5, column=2, value=f"=IF(AND({stack_cell}<>0,{stack_cell}<>\"\",{price_cell}<>\"\"),{price_cell}/{stack_cell},\"Enter values above\")")
+    ws_main.cell(row=calculator_start_row + 5, column=2).font = Font(bold=True)
+    ws_main.cell(row=calculator_start_row + 5, column=2).border = Border(outline=Side(style='thick'))
+    ws_main.cell(row=calculator_start_row + 5, column=2).fill = PatternFill(start_color="FFFFCC", end_color="FFFFCC", fill_type="solid")
+    
+    # Gold conversion
+    ws_main.cell(row=calculator_start_row + 6, column=1, value="Per-Unit Price (gold):")
+    ws_main.cell(row=calculator_start_row + 6, column=1).font = Font(bold=True)
+    ws_main.cell(row=calculator_start_row + 6, column=2, value=f"=IF(ISNUMBER({formula_cell}),{formula_cell}/10000,\"\")")
+    ws_main.cell(row=calculator_start_row + 6, column=2).font = Font(bold=True)
+    ws_main.cell(row=calculator_start_row + 6, column=2).border = Border(outline=Side(style='thick'))
+    ws_main.cell(row=calculator_start_row + 6, column=2).fill = PatternFill(start_color="FFFFCC", end_color="FFFFCC", fill_type="solid")
+    ws_main.cell(row=calculator_start_row + 6, column=2).number_format = '0.0000'
+    
+    # Instructions
+    ws_main.cell(row=calculator_start_row + 8, column=1, value="Instructions: Enter the stack size and total buyout price to calculate per-unit pricing")
+    ws_main.cell(row=calculator_start_row + 8, column=1).font = Font(italic=True, color="666666")
+    
+    # Auto-adjust column widths
+    for col in ws_main.columns:
+        max_length = 0
+        column = col[0].column_letter
+        for cell in col:
+            try:
+                if len(str(cell.value)) > max_length:
+                    max_length = len(str(cell.value))
+            except:
+                pass
+        adjusted_width = (max_length + 2)
+        ws_main.column_dimensions[column].width = adjusted_width
+    
+    # Horde bargains sheet
+    ws_horde = wb.create_sheet("Horde Bargains")
+    horde_headers = ['Item Name', 'Buyout Price (Gold)', 'Count', 'Seller']
+    
+    for col, header in enumerate(horde_headers, 1):
+        ws_horde.cell(row=1, column=col, value=header)
+    
+    # Group Horde items by name and find lowest prices
+    horde_by_name = defaultdict(list)
+    for item in horde_items:
+        horde_by_name[item['item_name']].append(item)
+    
+    horde_bargains = []
+    for name, items in horde_by_name.items():
+        # Filter to only buyout auctions
+        buyout_items = [item for item in items if item['buyout_price_gold'] > 0]
+        if buyout_items:  # Only add if there are buyout auctions
+            min_price_item = min(buyout_items, key=lambda x: x['buyout_price_gold'])
             horde_bargains.append({
                 'name': name,
                 'price': min_price_item['buyout_price_gold'],
                 'count': min_price_item['count'],
                 'seller': min_price_item['seller_name']
             })
-        
-        horde_bargains.sort(key=lambda x: x['price'])
-        for item in horde_bargains[:100]:
-            writer.writerow([item['name'], format_price_wow(item['price']), item['count'], item['seller']])
     
-    alliance_csv = f"alliance_bargains_{timestamp}.csv"
-    with open(alliance_csv, 'w', newline='', encoding='utf-8') as csvfile:
-        writer = csv.writer(csvfile)
-        writer.writerow(['Item Name', 'Buyout Price (Gold)', 'Count', 'Seller'])
-        
-        # Group Alliance items by name and find lowest prices
-        alliance_by_name = defaultdict(list)
-        for item in alliance_items:
-            alliance_by_name[item['item_name']].append(item)
-        
-        alliance_bargains = []
-        for name, items in alliance_by_name.items():
-            min_price_item = min(items, key=lambda x: x['buyout_price_gold'])
+    horde_bargains.sort(key=lambda x: x['price'])
+    for row, item in enumerate(horde_bargains[:100], 2):
+        ws_horde.cell(row=row, column=1, value=item['name'])
+        ws_horde.cell(row=row, column=2, value=format_price_wow(item['price']))
+        ws_horde.cell(row=row, column=3, value=item['count'])
+        ws_horde.cell(row=row, column=4, value=item['seller'])
+    
+    # Convert Horde sheet to table
+    if len(horde_bargains) > 0:
+        horde_table_ref = f"A1:D{min(101, len(horde_bargains) + 1)}"
+        horde_table = Table(displayName="HordeBargainsTable", ref=horde_table_ref)
+        horde_style = TableStyleInfo(name="TableStyleMedium2", showFirstColumn=False,
+                                   showLastColumn=False, showRowStripes=True, showColumnStripes=True)
+        horde_table.tableStyleInfo = horde_style
+        ws_horde.add_table(horde_table)
+    
+    # Auto-adjust Horde column widths
+    for col in ws_horde.columns:
+        max_length = 0
+        column = col[0].column_letter
+        for cell in col:
+            try:
+                if len(str(cell.value)) > max_length:
+                    max_length = len(str(cell.value))
+            except:
+                pass
+        adjusted_width = (max_length + 2)
+        ws_horde.column_dimensions[column].width = adjusted_width
+    
+    # Alliance bargains sheet
+    ws_alliance = wb.create_sheet("Alliance Bargains")
+    alliance_headers = ['Item Name', 'Buyout Price (Gold)', 'Count', 'Seller']
+    
+    for col, header in enumerate(alliance_headers, 1):
+        ws_alliance.cell(row=1, column=col, value=header)
+    
+    # Group Alliance items by name and find lowest prices
+    alliance_by_name = defaultdict(list)
+    for item in alliance_items:
+        alliance_by_name[item['item_name']].append(item)
+    
+    alliance_bargains = []
+    for name, items in alliance_by_name.items():
+        # Filter to only buyout auctions
+        buyout_items = [item for item in items if item['buyout_price_gold'] > 0]
+        if buyout_items:  # Only add if there are buyout auctions
+            min_price_item = min(buyout_items, key=lambda x: x['buyout_price_gold'])
             alliance_bargains.append({
                 'name': name,
                 'price': min_price_item['buyout_price_gold'],
                 'count': min_price_item['count'],
                 'seller': min_price_item['seller_name']
             })
-        
-        alliance_bargains.sort(key=lambda x: x['price'])
-        for item in alliance_bargains[:100]:
-            writer.writerow([item['name'], format_price_wow(item['price']), item['count'], item['seller']])
     
-    print(f"Generated Horde bargains: {horde_csv}")
-    print(f"Generated Alliance bargains: {alliance_csv}")
+    alliance_bargains.sort(key=lambda x: x['price'])
+    for row, item in enumerate(alliance_bargains[:100], 2):
+        ws_alliance.cell(row=row, column=1, value=item['name'])
+        ws_alliance.cell(row=row, column=2, value=format_price_wow(item['price']))
+        ws_alliance.cell(row=row, column=3, value=item['count'])
+        ws_alliance.cell(row=row, column=4, value=item['seller'])
     
-    return csv_filename, horde_csv, alliance_csv
+    # Convert Alliance sheet to table
+    if len(alliance_bargains) > 0:
+        alliance_table_ref = f"A1:D{min(101, len(alliance_bargains) + 1)}"
+        alliance_table = Table(displayName="AllianceBargainsTable", ref=alliance_table_ref)
+        alliance_style = TableStyleInfo(name="TableStyleMedium6", showFirstColumn=False,
+                                      showLastColumn=False, showRowStripes=True, showColumnStripes=True)
+        alliance_table.tableStyleInfo = alliance_style
+        ws_alliance.add_table(alliance_table)
+    
+    # Auto-adjust Alliance column widths
+    for col in ws_alliance.columns:
+        max_length = 0
+        column = col[0].column_letter
+        for cell in col:
+            try:
+                if len(str(cell.value)) > max_length:
+                    max_length = len(str(cell.value))
+            except:
+                pass
+        adjusted_width = (max_length + 2)
+        ws_alliance.column_dimensions[column].width = adjusted_width
+    
+    # Save Excel file
+    excel_filename = f"ah_analysis_{timestamp}.xlsx"
+    wb.save(excel_filename)
+    
+    print(f"Generated Excel report: {excel_filename}")
+    print(f"- Arbitrage Analysis sheet with {len(arbitrage_opportunities)} opportunities")
+    print(f"- Horde Bargains sheet with top 100 items")
+    print(f"- Alliance Bargains sheet with top 100 items")
+    
+    return excel_filename
 
 def main():
     """Main function"""
@@ -476,16 +648,16 @@ def main():
     horde_histogram_path = r"C:\Program Files (x86)\World of Warcraft\_classic_era_\WTF\Account\LUCIA1\SavedVariables\Auc-Stat-Histogram.lua"
     alliance_histogram_path = r"C:\Program Files (x86)\World of Warcraft\_classic_era_\WTF\Account\51718250#1\SavedVariables\Auc-Stat-Histogram.lua"
     
-    # StdDev file paths (contains market prices)
-    horde_stddev_path = r"C:\Program Files (x86)\World of Warcraft\_classic_era_\WTF\Account\LUCIA1\SavedVariables\Auc-Stat-StdDev.lua"
-    alliance_stddev_path = r"C:\Program Files (x86)\World of Warcraft\_classic_era_\WTF\Account\51718250#1\SavedVariables\Auc-Stat-StdDev.lua"
+    # Simple stat file paths (contains market prices)
+    horde_simple_path = r"C:\Program Files (x86)\World of Warcraft\_classic_era_\WTF\Account\LUCIA1\SavedVariables\Auc-Stat-Simple.lua"
+    alliance_simple_path = r"C:\Program Files (x86)\World of Warcraft\_classic_era_\WTF\Account\51718250#1\SavedVariables\Auc-Stat-Simple.lua"
     
     print(f"Horde data path: {horde_path}")
     print(f"Alliance data path: {alliance_path}")
     print(f"Horde histogram path: {horde_histogram_path}")
     print(f"Alliance histogram path: {alliance_histogram_path}")
-    print(f"Horde StdDev path: {horde_stddev_path}")
-    print(f"Alliance StdDev path: {alliance_stddev_path}")
+    print(f"Horde Simple stat path: {horde_simple_path}")
+    print(f"Alliance Simple stat path: {alliance_simple_path}")
     print()
     
     # Check if files exist
@@ -497,19 +669,30 @@ def main():
         print(f"ERROR: Alliance scan data not found at {alliance_path}")
         return
     
-    # Extract times seen data from histogram files
+    # Extract times seen data and market prices from histogram files
     print("Extracting Horde histogram data...")
-    horde_times_seen, _ = parse_auc_stat_histogram(horde_histogram_path)
+    horde_times_seen, horde_histogram_market_prices = parse_auc_stat_histogram(horde_histogram_path)
     
     print("Extracting Alliance histogram data...")
-    alliance_times_seen, _ = parse_auc_stat_histogram(alliance_histogram_path)
+    alliance_times_seen, alliance_histogram_market_prices = parse_auc_stat_histogram(alliance_histogram_path)
     
-    # Extract market price data from StdDev files
+    # Extract market price data from Simple stat files (better than histogram prices)
     print("Extracting Horde market price data...")
-    horde_market_prices = parse_auc_stat_stddev(horde_stddev_path)
+    horde_market_prices = parse_auc_stat_simple_market_prices(horde_simple_path)
     
     print("Extracting Alliance market price data...")
-    alliance_market_prices = parse_auc_stat_stddev(alliance_stddev_path)
+    alliance_market_prices = parse_auc_stat_simple_market_prices(alliance_simple_path)
+    
+    # Also get times seen from Simple stat (more accurate than histogram)
+    print("Extracting Horde times seen from Simple stat...")
+    horde_simple_times_seen = parse_auc_stat_simple(horde_simple_path)
+    
+    print("Extracting Alliance times seen from Simple stat...")
+    alliance_simple_times_seen = parse_auc_stat_simple(alliance_simple_path)
+    
+    # Use Simple stat times seen (they're more accurate)
+    horde_times_seen = horde_simple_times_seen
+    alliance_times_seen = alliance_simple_times_seen
     
     # Extract auction data
     print("Extracting Horde auction data...")
@@ -543,19 +726,17 @@ def main():
         print("- Data parsing needs adjustment")
     
     # Generate reports
-    main_csv, horde_csv, alliance_csv = generate_csv_report(horde_items, alliance_items, arbitrage_opportunities)
+    excel_file = generate_excel_report(horde_items, alliance_items, arbitrage_opportunities)
     
     print(f"\nAnalysis complete!")
-    print(f"Main report: {main_csv}")
-    print(f"Top 100 Horde bargains: {horde_csv}")
-    print(f"Top 100 Alliance bargains: {alliance_csv}")
+    print(f"Excel report: {excel_file}")
     
-    # Open the main CSV file
+    # Open the Excel file
     try:
-        os.startfile(main_csv)
-        print("Opened main report in Excel")
+        os.startfile(excel_file)
+        print("Opened Excel report")
     except:
-        print(f"Please open {main_csv} manually in Excel")
+        print(f"Please open {excel_file} manually")
 
 if __name__ == "__main__":
     main()

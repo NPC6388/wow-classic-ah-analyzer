@@ -1,0 +1,43 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+
+# Analysis outputs
+*.csv
+*.xlsx
+~$*.xlsx
+
+# Debug and temporary files
+*debug*.py
+*_debugging*.py
+*_new.py
+*_new.txt
+*_with_claude.py
+context*.txt
+*_analysis_*.txt
+claude_*.py
+simple_*.py
+
+# Claude/AI artifacts
+.claude/
+mcp_config.json
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Backup files
+*Copy*.html
+*- Copy*.html
